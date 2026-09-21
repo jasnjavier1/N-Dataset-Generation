@@ -8,15 +8,17 @@ from random import Random
 from typing import Any
 
 try:
+    from .domain_catalog import DomainCatalog
     from .event_factory import EventFactory
+    from .personas import PersonaManager
+    from .response_engine import DNSResponseEngine
+    from .time_scheduler import TimeScheduler
 except ImportError:  # pragma: no cover - script-mode fallback
+    from domain_catalog import DomainCatalog
     from event_factory import EventFactory
-
-
-@dataclass(frozen=True, slots=True)
-class DNSCacheEntry:
-    answers: tuple[str, ...]
-    expires_at: datetime
+    from personas import PersonaManager
+    from response_engine import DNSResponseEngine
+    from time_scheduler import TimeScheduler
 
 
 @dataclass(slots=True)
@@ -41,447 +43,17 @@ class BaselineScenario:
         self.domains = domains
         self.resolvers = resolvers
         self.source_ips = source_ips
-        self.hosts = hosts or self._default_hosts()
-        self._cache: dict[tuple[str, str, str], list[DNSCacheEntry]] = defaultdict(list)
 
-        self.domain_categories = {
-            "login.contoso.com": "business",
-            "portal.contoso.com": "business",
-            "www.office.com": "business",
-            "api.salesforce.com": "saas",
-            "github.com": "developer",
-            "cdn.example.net": "cloud",
-            "drive.microsoft.com": "cloud",
-            "update.windows.com": "system",
-            "teams.microsoft.com": "business",
-            "outlook.office.com": "business",
-            "sharepoint.com": "business",
-            "app.powerbi.com": "business",
-            "docs.microsoft.com": "developer",
-            "www.google.com": "web",
-            "www.bing.com": "search",
-            "www.linkedin.com": "social",
-            "www.netflix.com": "streaming",
-            "api.github.com": "developer",
-            "raw.githubusercontent.com": "developer",
-            "pypi.org": "developer",
-            "www.npmjs.com": "developer",
-            "www.amazon.com": "shopping",
-            "www.wikipedia.org": "reference",
-            "status.office.com": "business",
-            "onedrive.live.com": "cloud",
-            "dl.delivery.mp.microsoft.com": "system",
-            "windowsupdate.com": "system",
-            "crl.microsoft.com": "system",
-            "login.microsoftonline.com": "business",
-            "graph.microsoft.com": "business",
-            "login.salesforce.com": "saas",
-            "naXX.salesforce.com": "saas",
-            "assets.adobe.com": "creative",
-            "www.dropbox.com": "cloud",
-            "api.dropboxapi.com": "cloud",
-        }
-        self.domain_weights = {
-            "login.contoso.com": 26,
-            "portal.contoso.com": 18,
-            "www.office.com": 16,
-            "api.salesforce.com": 12,
-            "github.com": 9,
-            "cdn.example.net": 7,
-            "drive.microsoft.com": 6,
-            "update.windows.com": 4,
-            "teams.microsoft.com": 13,
-            "outlook.office.com": 10,
-            "sharepoint.com": 11,
-            "app.powerbi.com": 6,
-            "docs.microsoft.com": 6,
-            "www.google.com": 5,
-            "www.bing.com": 4,
-            "www.linkedin.com": 3,
-            "www.netflix.com": 2,
-            "api.github.com": 5,
-            "raw.githubusercontent.com": 4,
-            "pypi.org": 3,
-            "www.npmjs.com": 3,
-            "www.amazon.com": 2,
-            "www.wikipedia.org": 2,
-            "status.office.com": 3,
-            "onedrive.live.com": 4,
-            "dl.delivery.mp.microsoft.com": 3,
-            "windowsupdate.com": 3,
-            "crl.microsoft.com": 2,
-            "login.microsoftonline.com": 8,
-            "graph.microsoft.com": 6,
-            "login.salesforce.com": 5,
-            "naXX.salesforce.com": 4,
-            "assets.adobe.com": 2,
-            "www.dropbox.com": 2,
-            "api.dropboxapi.com": 2,
-        }
-        self.domain_families = {
-            "m365": ("login.contoso.com", "portal.contoso.com", "www.office.com", "teams.microsoft.com", "outlook.office.com", "sharepoint.com", "status.office.com", "login.microsoftonline.com", "graph.microsoft.com"),
-            "browser": ("www.google.com", "www.bing.com", "www.linkedin.com", "www.wikipedia.org", "www.amazon.com", "www.netflix.com", "www.dropbox.com", "www.office.com", "github.com", "drive.microsoft.com", "cdn.example.net"),
-            "salesforce": ("api.salesforce.com", "login.salesforce.com", "naXX.salesforce.com", "login.contoso.com", "portal.contoso.com"),
-            "github": ("github.com", "api.github.com", "raw.githubusercontent.com", "docs.microsoft.com", "pypi.org", "www.npmjs.com"),
-            "update": ("update.windows.com", "windowsupdate.com", "dl.delivery.mp.microsoft.com", "crl.microsoft.com", "cdn.example.net", "status.office.com"),
-            "internal": ("login.contoso.com", "portal.contoso.com", "graph.microsoft.com", "sharepoint.com", "onedrive.live.com", "drive.microsoft.com"),
-            "cdn": ("cdn.example.net", "onedrive.live.com", "assets.adobe.com", "drive.microsoft.com", "www.dropbox.com"),
-            "recursive": ("login.contoso.com", "portal.contoso.com", "api.salesforce.com", "github.com", "login.microsoftonline.com"),
-        }
-        self.persona_profiles = {
-            "user": {
-                "applications": ("m365", "browser", "salesforce", "github"),
-                "session_count_per_day": (1, 4),
-                "burst_size": (2, 7),
-                "day_bias": {0: 1.0, 1: 1.0, 2: 1.1, 3: 1.1, 4: 1.2, 5: 0.7, 6: 0.5},
-            },
-            "service": {
-                "applications": ("update", "internal", "cdn"),
-                "session_count_per_day": (1, 3),
-                "burst_size": (2, 5),
-                "day_bias": {0: 1.0, 1: 1.0, 2: 1.0, 3: 1.0, 4: 1.0, 5: 0.8, 6: 0.7},
-            },
-            "resolver": {
-                "applications": ("recursive", "cache", "internal"),
-                "session_count_per_day": (2, 6),
-                "burst_size": (3, 9),
-                "day_bias": {0: 1.0, 1: 1.0, 2: 1.1, 3: 1.1, 4: 1.1, 5: 0.9, 6: 0.8},
-            },
-        }
-
-    def _default_hosts(self) -> tuple[dict[str, object], ...]:
-        return (
-            {
-                "device_id": "HOST-1001",
-                "user_id": "alice",
-                "role": "user",
-                "client_ip": "10.0.1.15",
-                "source_type": "endpoint_dns",
-                "source_name": "endpoint-win10-01",
-                "resolver_ip": "10.0.0.10",
-                "preferred_domains": (
-                    "login.contoso.com",
-                    "portal.contoso.com",
-                    "www.office.com",
-                    "api.salesforce.com",
-                ),
-            },
-            {
-                "device_id": "HOST-1002",
-                "user_id": "bob",
-                "role": "user",
-                "client_ip": "10.0.1.16",
-                "source_type": "endpoint_dns",
-                "source_name": "endpoint-win10-02",
-                "resolver_ip": "10.0.0.11",
-                "preferred_domains": (
-                    "www.office.com",
-                    "github.com",
-                    "drive.microsoft.com",
-                    "portal.contoso.com",
-                ),
-            },
-            {
-                "device_id": "HOST-1003",
-                "user_id": "charlie",
-                "role": "user",
-                "client_ip": "10.0.1.17",
-                "source_type": "endpoint_dns",
-                "source_name": "endpoint-win10-03",
-                "resolver_ip": "10.0.0.10",
-                "preferred_domains": (
-                    "login.contoso.com",
-                    "api.salesforce.com",
-                    "portal.contoso.com",
-                    "github.com",
-                ),
-            },
-            {
-                "device_id": "HOST-2001",
-                "user_id": "svc-update",
-                "role": "service",
-                "client_ip": "10.0.2.45",
-                "source_type": "endpoint_dns",
-                "source_name": "endpoint-update-service",
-                "resolver_ip": "10.0.0.12",
-                "preferred_domains": (
-                    "update.windows.com",
-                    "cdn.example.net",
-                    "login.contoso.com",
-                    "www.office.com",
-                ),
-            },
-            {
-                "device_id": "DNS-RESOLVER-01",
-                "user_id": "",
-                "role": "resolver",
-                "client_ip": "10.0.0.10",
-                "source_type": "resolver_dns",
-                "source_name": "resolver-core-01",
-                "resolver_ip": "10.0.0.10",
-                "preferred_domains": (
-                    "login.contoso.com",
-                    "portal.contoso.com",
-                    "api.salesforce.com",
-                    "drive.microsoft.com",
-                ),
-            },
-        )
-
-    def _weighted_choice(self, options: dict[str, int]) -> str:
-        return self.random.choices(
-            population=list(options.keys()),
-            weights=list(options.values()),
-            k=1,
-        )[0]
-
-    def _persona_for_host(self, host: dict[str, object]) -> str:
-        role = str(host.get("role", "user")).lower()
-        if role == "service":
-            return "service"
-        if role == "resolver":
-            return "resolver"
-        return "user"
-
-    def _choose_application_for_host(self, host: dict[str, object], weekday: int) -> str:
-        persona = self._persona_for_host(host)
-        apps = self.persona_profiles[persona]["applications"]
-        weights = [
-            6 if app == "m365" else 5 if app == "browser" else 4 if app == "salesforce" else 3 if app == "github" else 5 if app == "update" else 4 if app == "cdn" else 4
-            for app in apps
-        ]
-        if weekday in (5, 6):
-            if "browser" in apps:
-                return self.random.choices(apps, weights=weights, k=1)[0]
-        return self.random.choices(apps, weights=weights, k=1)[0]
-
-    def _choose_host(self) -> dict[str, object]:
-        role_weights = {
-            "user": 10,
-            "service": 4,
-            "resolver": 6,
-        }
-        weights = [
-            role_weights.get(str(host.get("role", "user")), 1)
-            for host in self.hosts
-        ]
-        return self.random.choices(self.hosts, weights=weights, k=1)[0]
-
-    def _choose_domain_for_host(self, host: dict[str, object], app: str | None = None) -> str:
-        preferred_raw = host.get("preferred_domains", self.domains)
-        preferred = tuple(str(domain) for domain in preferred_raw) if isinstance(preferred_raw, (list, tuple)) else self.domains
-        app_domain_map = self.domain_families
-        app_key = app if app is not None else ""
-        source_domains = tuple(str(domain) for domain in app_domain_map.get(app_key, ())) or preferred
-        if source_domains and self.random.random() < 0.85:
-            preferred_weights = {
-                domain: self.domain_weights.get(domain, 1)
-                for domain in source_domains
-            }
-            return self._weighted_choice(preferred_weights)
-        if preferred:
-            preferred_weights = {
-                domain: self.domain_weights.get(domain, 1)
-                for domain in preferred
-            }
-            return self._weighted_choice(preferred_weights)
-        return self._weighted_choice(self.domain_weights)
-
-    def _choose_query_type(self, domain: str) -> str:
-        if domain.endswith(".contoso.com"):
-            return self.random.choices(["A", "AAAA", "CNAME"], weights=[78, 20, 2], k=1)[0]
-        if domain == "update.windows.com":
-            return self.random.choices(["A", "AAAA"], weights=[85, 15], k=1)[0]
-        if domain == "github.com":
-            return self.random.choices(["A", "AAAA"], weights=[88, 12], k=1)[0]
-        if domain in {"drive.microsoft.com", "www.office.com", "api.salesforce.com"}:
-            return self.random.choices(["A", "AAAA", "CNAME"], weights=[80, 18, 2], k=1)[0]
-        return self.random.choices(["A", "AAAA", "TXT", "MX"], weights=[75, 20, 3, 2], k=1)[0]
-
-    def _build_answer(self, domain: str, query_type: str) -> list[str]:
-        if query_type == "AAAA":
-            if domain.endswith(".contoso.com"):
-                return ["fd00:10:0:1::10"]
-            if domain == "update.windows.com":
-                return ["2620:1ec:c11::200"]
-            return ["2606:4700:4700::1111"]
-
-        if query_type == "MX":
-            if domain.endswith(".contoso.com"):
-                return ["mail.contoso.com"]
-            return ["mail.protection.outlook.com"]
-
-        if query_type == "TXT":
-            if domain.endswith(".contoso.com"):
-                return ["v=spf1 include:contoso.com -all"]
-            return ["v=spf1 include:spf.protection.outlook.com -all"]
-
-        if query_type == "CNAME":
-            if domain == "login.contoso.com":
-                return ["auth.contoso.com"]
-            if domain == "portal.contoso.com":
-                return ["portal-frontdoor.contoso.com"]
-            return ["cdn.redirect.example.net"]
-
-        if domain.endswith(".contoso.com"):
-            return [self.random.choice(("10.20.30.40", "10.20.30.41", "10.20.30.42"))]
-
-        if domain == "update.windows.com":
-            return [self.random.choice(("13.107.42.14", "13.107.246.40", "20.190.160.10"))]
-
-        return [self.random.choice(("93.184.216.34", "151.101.1.69", "104.16.123.96"))]
-
-    def _hour_weights_for_role(self, role: str) -> dict[int, int]:
-        if role == "service":
-            return {
-                0: 4, 1: 5, 2: 8, 3: 10, 4: 8, 5: 6,
-                6: 4, 7: 3, 8: 3, 9: 4, 10: 4, 11: 4,
-                12: 4, 13: 4, 14: 4, 15: 4, 16: 4, 17: 4,
-                18: 4, 19: 4, 20: 4, 21: 4, 22: 4, 23: 4,
-            }
-        if role == "resolver":
-            return {
-                0: 2, 1: 2, 2: 2, 3: 2, 4: 2, 5: 3,
-                6: 5, 7: 9, 8: 18, 9: 22, 10: 20, 11: 18,
-                12: 17, 13: 17, 14: 18, 15: 19, 16: 16, 17: 10,
-                18: 6, 19: 4, 20: 3, 21: 3, 22: 2, 23: 2,
-            }
-        return {
-            0: 1, 1: 1, 2: 1, 3: 1, 4: 1, 5: 2,
-            6: 4, 7: 10, 8: 20, 9: 24, 10: 18, 11: 16,
-            12: 15, 13: 15, 14: 16, 15: 18, 16: 14, 17: 8,
-            18: 4, 19: 2, 20: 2, 21: 2, 22: 1, 23: 1,
-        }
-
-    def _sample_timestamp(self, start: datetime, end: datetime, host: dict[str, object]) -> datetime:
-        role = str(host.get("role", "user"))
-        hour_weights = self._hour_weights_for_role(role)
-        total_days = max(0, (end.date() - start.date()).days)
-
-        for _ in range(25):
-            day_offset = self.random.randint(0, total_days)
-            base_day = start.date() + timedelta(days=day_offset)
-            hour = self.random.choices(
-                population=list(hour_weights.keys()),
-                weights=list(hour_weights.values()),
-                k=1,
-            )[0]
-            minute = self.random.randint(0, 59)
-            second = self.random.randint(0, 59)
-
-            ts = datetime(
-                year=base_day.year,
-                month=base_day.month,
-                day=base_day.day,
-                hour=hour,
-                minute=minute,
-                second=second,
-                tzinfo=start.tzinfo,
-            )
-            if start <= ts <= end:
-                return ts
-
-        return self.factory.random_time(start, end)
-
-    def _maybe_make_nxdomain(self, domain: str) -> str:
-        if "." not in domain:
-            return f"{domain}-typo.invalid"
-
-        labels = domain.split(".")
-        first = labels[0]
-        if len(first) > 4:
-            first = first[:-1]
-        else:
-            first = first + "x"
-        labels[0] = first
-        return ".".join(labels)
-
-    def _sample_response(
-        self,
-        timestamp: datetime,
-        host: dict[str, object],
-        domain: str,
-        query_type: str,
-    ) -> dict[str, Any]:
-        role = str(host.get("role", "user"))
-        resolver_ip = str(host.get("resolver_ip", self.random.choice(self.resolvers)))
-
-        nxdomain_rate = 0.03 if role == "user" else 0.01
-        servfail_rate = 0.005 if role != "service" else 0.01
-
-        failure_roll = self.random.random()
-        if failure_roll < nxdomain_rate:
-            typo_domain = self._maybe_make_nxdomain(domain)
-            return {
-                "query_name": typo_domain,
-                "response_code": "NXDOMAIN",
-                "answers": [],
-                "ttl": 0,
-                "result": "failure",
-                "result_code": "DNS-9003",
-                "response_latency_ms": self.random.randint(18, 55),
-                "cache_hit": False,
-                "answer_count": 0,
-                "resolver_ip": resolver_ip,
-            }
-
-        if failure_roll < nxdomain_rate + servfail_rate:
-            return {
-                "query_name": domain,
-                "response_code": "SERVFAIL",
-                "answers": [],
-                "ttl": 0,
-                "result": "failure",
-                "result_code": "DNS-2",
-                "response_latency_ms": self.random.randint(25, 80),
-                "cache_hit": False,
-                "answer_count": 0,
-                "resolver_ip": resolver_ip,
-            }
-
-        cache_key = (resolver_ip, domain, query_type)
-        cached_entries = self._cache.get(cache_key, [])
-        fresh_candidates = [entry for entry in cached_entries if entry.expires_at > timestamp]
-        self._cache[cache_key] = fresh_candidates
-
-        if fresh_candidates:
-            ordered = sorted(fresh_candidates, key=lambda item: item.expires_at)
-            active_entry = ordered[0]
-            remaining_ttl = max(1, int((active_entry.expires_at - timestamp).total_seconds()))
-            return {
-                "query_name": domain,
-                "response_code": "NOERROR",
-                "answers": list(active_entry.answers),
-                "ttl": remaining_ttl,
-                "result": "success",
-                "result_code": "DNS-0",
-                "response_latency_ms": self.random.randint(2, 10),
-                "cache_hit": True,
-                "answer_count": len(active_entry.answers),
-                "resolver_ip": resolver_ip,
-            }
-
-        ttl = self.random.choices([30, 60, 120, 300, 600], weights=[5, 15, 25, 35, 20], k=1)[0]
-        answers = self._build_answer(domain, query_type)
-        self._cache[cache_key].append(
-            DNSCacheEntry(
-                answers=tuple(answers),
-                expires_at=timestamp + timedelta(seconds=ttl),
-            )
-        )
-
-        return {
-            "query_name": domain,
-            "response_code": "NOERROR",
-            "answers": answers,
-            "ttl": ttl,
-            "result": "success",
-            "result_code": "DNS-0",
-            "response_latency_ms": self.random.randint(12, 45),
-            "cache_hit": False,
-            "answer_count": len(answers),
-            "resolver_ip": resolver_ip,
-        }
+        default_hosts = PersonaManager(random=random).default_hosts()
+        self.persona_manager = PersonaManager(random=random, hosts=hosts or default_hosts)
+        self.hosts = self.persona_manager.hosts
+        self.persona_profiles = self.persona_manager.persona_profiles
+        self.domain_catalog = DomainCatalog(random=random, domains=domains, host_profiles=self.hosts)
+        self.time_scheduler = TimeScheduler(random=random, factory=factory)
+        self.response_engine = DNSResponseEngine(random=random, resolvers=resolvers)
+        self.domain_categories = self.domain_catalog.domain_categories
+        self.domain_weights = self.domain_catalog.domain_weights
+        self.domain_families = self.domain_catalog.domain_families
 
     def _sample_query(
         self,
@@ -492,11 +64,11 @@ class BaselineScenario:
         persona: str | None = None,
         domain: str | None = None,
     ) -> QueryPayload:
-        app_name = app or self._choose_application_for_host(host, 0)
-        persona_name = persona or self._persona_for_host(host)
-        chosen_domain = domain or self._choose_domain_for_host(host, app_name)
-        query_type = self._choose_query_type(chosen_domain)
-        response = self._sample_response(timestamp, host, chosen_domain, query_type)
+        app_name = app or self.persona_manager.choose_application_for_host(host, 0)
+        persona_name = persona or self.persona_manager.persona_for_host(host)
+        chosen_domain = domain or self.domain_catalog.choose_domain_for_host(host, app_name)
+        query_type = self.domain_catalog.choose_query_type(chosen_domain)
+        response = self.response_engine.sample_response(timestamp, host, chosen_domain, query_type)
         query_name = str(response["query_name"])
         category = self.domain_categories.get(chosen_domain, "business")
         is_external = not query_name.endswith(".contoso.com")
@@ -604,7 +176,7 @@ class BaselineScenario:
 
         window_hours = max(1, ceil((end - start).total_seconds() / 3600))
         target_total = max(1, window_hours * benign_events_per_hour)
-        self._cache.clear()
+        self.response_engine.clear()
 
         events: list[dict[str, str]] = []
         day_count = max(1, (end.date() - start.date()).days + 1)
@@ -634,15 +206,13 @@ class BaselineScenario:
                     if len(events) >= target_total:
                         break
 
-                    app = self._choose_application_for_host(host, weekday)
-                    session_start = self._sample_timestamp(day_start, day_end, host)
+                    app = self.persona_manager.choose_application_for_host(host, weekday)
+                    session_start = self.time_scheduler.sample_timestamp(day_start, day_end, host)
                     chain = self._build_domain_chain(host, app, persona)
                     if persona == "resolver":
-                        burst_size = self.random.randint(8, 18)
-                        gap_seconds = self.random.randint(1, 8)
+                        burst_size, gap_seconds = self.time_scheduler.choose_burst(host, profile)
                     else:
-                        burst_size = self.random.randint(*profile["burst_size"])
-                        gap_seconds = self.random.randint(10, 45)
+                        burst_size, gap_seconds = self.time_scheduler.choose_burst(host, profile)
 
                     for offset in range(min(len(chain), max(2, burst_size))):
                         if len(events) >= target_total:
@@ -666,11 +236,11 @@ class BaselineScenario:
 
         if len(events) < target_total:
             while len(events) < target_total:
-                host = self._choose_host()
-                ts = self._sample_timestamp(start, end, host)
-                persona = self._persona_for_host(host)
-                app = self._choose_application_for_host(host, ts.weekday())
-                domain = self._choose_domain_for_host(host, app)
+                host = self.persona_manager.choose_host()
+                ts = self.time_scheduler.sample_timestamp(start, end, host)
+                persona = self.persona_manager.persona_for_host(host)
+                app = self.persona_manager.choose_application_for_host(host, ts.weekday())
+                domain = self.domain_catalog.choose_domain_for_host(host, app)
                 payload = self._sample_query(ts, host, app=app, persona=persona, domain=domain)
                 events.append(
                     self._build_event_record(
